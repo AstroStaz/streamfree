@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>ZAPP — Free Live TV</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet"/>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js"></script>
+<style>
+:root {
+  --bg:       #05050a;
+  --surface:  #0c0c14;
+  --lift:     #12121e;
+  --border:   #1c1c2e;
+  --accent:   #e8ff47;
+  --accent2:  #ff4f7b;
+  --text:     #f0f0f8;
+  --muted:    #44445a;
+  --dim:      #22223a;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { height: 100%; }
+body {
+  min-height: 100%; background: var(--bg); color: var(--text);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 14px; line-height: 1.5;
+  overflow-x: hidden;
+}
+::-webkit-scrollbar { width: 2px; }
+::-webkit-scrollbar-thumb { background: var(--dim); border-radius: 4px; }
+
+/* ─── NOISE OVERLAY ─── */
+body::before {
+  content: '';
+  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  opacity: 0.025;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 128px;
+}
+
+/* ─── LAYOUT SHELL ─── */
+#shell {
+  position: relative; z-index: 1;
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  grid-template-rows: 1fr;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ─── ICON RAIL ─── */
+#rail {
+  grid-column: 1;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  align-items: center;
+  padding: 20px 0;
+  gap: 6px;
+  z-index: 10;
+}
+.rail-logo {
+  width: 36px; height: 36px;
+  background: var(--accent);
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-family: 'Syne', sans-serif;
+  font-weight: 800; font-size: 13px;
+  color: #05050a;
+  margin-bottom: 16px;
+  letter-spacing: -0.5px;
+  flex-shrink: 0;
+}
+.rail-sep { width: 28px; height: 1px; background: var(--border); margin: 4px 0; }
+.rail-btn {
+  width: 44px; height: 44px; border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 18px; cursor: pointer;
+  transition: background 0.15s;
+  border: none; background: none; color: var(--muted);
+  position: relative;
+}
+.rail-btn:hover, .rail-btn.active { background: var(--lift); color: var(--text); }
+.rail-btn.active::before {
+  content: ''; position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+  width: 3px; height: 20px; background: var(--accent); border-radius: 0 3px 3px 0;
+}
+.rail-spacer { flex: 1; }
+
+/* ─── CONTENT AREA ─── */
+#content {
+  grid-column: 2;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+
+/* ─── TOP BAR ─── */
+#topbar {
+  flex-shrink: 0;
+  height: 60px;
+  display: flex; align-items: center;
+  padding: 0 28px; gap: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.topbar-title {
+  font-family: 'Syne', sans-serif;
+  font-weight: 700; font-size: 16px;
+  color: var(--text); white-space: nowrap;
+}
+.topbar-search {
+  flex: 1; max-width: 380px;
+  height: 36px; position: relative;
+}
+.topbar-search input {
+  width: 100%; height: 100%;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; color: var(--text);
+  font-family: 'DM Sans', sans-serif; font-size: 13px;
+  padding: 0 14px 0 36px; outline: none;
+  transition: border-color 0.2s;
+}
+.topbar-search input::placeholder { color: var(--muted); }
+.topbar-search input:focus { border-color: var(--accent); }
+.topbar-search-icon {
+  position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+  color: var(--muted); font-size: 14px; pointer-events: none;
+}
+.topbar-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+.live-badge {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; font-weight: 500; color: var(--accent2);
+  letter-spacing: 0.04em;
+}
+.live-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent2); box-shadow: 0 0 8px var(--accent2);
+  animation: livepulse 1.8s ease-in-out infinite;
+}
+@keyframes livepulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+.count-chip {
+  height: 28px; padding: 0 12px;
+  background: var(--dim); border-radius: 6px;
+  font-size: 11px; color: var(--muted);
+  display: flex; align-items: center;
+  white-space: nowrap;
+}
+.count-chip span { color: var(--text); font-weight: 500; margin-right: 4px; }
+
+/* ─── FILTER STRIP ─── */
+#filter-strip {
+  flex-shrink: 0;
+  height: 48px;
+  display: flex; align-items: center; gap: 6px;
+  padding: 0 28px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+#filter-strip::-webkit-scrollbar { display: none; }
+.fpill {
+  height: 28px; padding: 0 14px;
+  border-radius: 6px; border: 1px solid var(--border);
+  background: none; color: var(--muted);
+  font-family: 'DM Sans', sans-serif; font-size: 11px; font-weight: 500;
+  cursor: pointer; white-space: nowrap; flex-shrink: 0;
+  transition: all 0.15s; letter-spacing: 0.03em;
+}
+.fpill:hover { color: var(--text); border-color: var(--dim); }
+.fpill.on { background: var(--accent); border-color: var(--accent); color: #05050a; font-weight: 700; }
+.fstrip-sep { width: 1px; height: 18px; background: var(--border); flex-shrink: 0; margin: 0 2px; }
+#country-sel {
+  height: 28px; padding: 0 10px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--muted);
+  font-family: 'DM Sans', sans-serif; font-size: 11px;
+  outline: none; cursor: pointer; flex-shrink: 0;
+  transition: border-color 0.15s;
+}
+#country-sel:focus { border-color: var(--accent); color: var(--text); }
+
+/* ─── GRID VIEW ─── */
+#grid-view {
+  flex: 1; overflow-y: auto;
+  padding: 24px 28px 40px;
+}
+.section-label {
+  font-size: 11px; font-weight: 500; color: var(--muted);
+  letter-spacing: 0.1em; text-transform: uppercase;
+  margin-bottom: 14px;
+}
+.channel-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 10px;
+}
+
+/* Card */
+.ccard {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden; cursor: pointer;
+  transition: transform 0.18s cubic-bezier(.34,1.56,.64,1), border-color 0.18s, box-shadow 0.18s;
+  animation: cardin 0.35s ease both;
+}
+@keyframes cardin { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
+.ccard:hover {
+  transform: translateY(-5px) scale(1.01);
+  border-color: var(--accent);
+  box-shadow: 0 12px 40px rgba(232,255,71,0.08);
+}
+.ccard-img {
+  width: 100%; aspect-ratio: 16/9;
+  background: var(--lift);
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden; position: relative;
+}
+.ccard-img img { max-width: 55%; max-height: 55%; object-fit: contain; transition: transform 0.2s; }
+.ccard:hover .ccard-img img { transform: scale(1.08); }
+.ccard-placeholder { font-size: 26px; opacity: 0.2; }
+.ccard-body { padding: 9px 11px 11px; }
+.ccard-name {
+  font-size: 12px; font-weight: 500; color: var(--text);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  margin-bottom: 5px;
+}
+.ccard-foot { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+.ccard-cat {
+  font-size: 9px; font-weight: 500; color: var(--muted);
+  text-transform: uppercase; letter-spacing: 0.07em;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ccard-flag { width: 16px; height: 11px; border-radius: 2px; flex-shrink: 0; object-fit: cover; }
+
+/* Skeleton */
+.skel { background: linear-gradient(90deg, var(--surface) 25%, var(--lift) 50%, var(--surface) 75%); background-size: 200% 100%; animation: shimmer 1.5s infinite; border-radius: 4px; }
+@keyframes shimmer { 0%{background-position:200% 0} 100%{background-position:-200% 0} }
+.skel-card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.skel-img { width: 100%; aspect-ratio: 16/9; }
+.skel-body { padding: 9px 11px 11px; display: flex; flex-direction: column; gap: 7px; }
+.skel-line { height: 9px; border-radius: 4px; }
+
+/* Empty/error */
+.grid-msg {
+  grid-column: 1/-1;
+  min-height: 320px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; text-align: center;
+}
+.grid-msg-icon { font-size: 44px; margin-bottom: 4px; }
+.grid-msg-title { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 17px; color: var(--text); }
+.grid-msg-sub { font-size: 12px; color: var(--muted); max-width: 280px; }
+.grid-msg-btn {
+  margin-top: 10px; height: 38px; padding: 0 22px;
+  background: var(--accent); border: none; border-radius: 8px;
+  font-family: 'DM Sans', sans-serif; font-size: 13px; font-weight: 600;
+  color: #05050a; cursor: pointer;
+}
+.more-cap { grid-column: 1/-1; text-align: center; padding: 20px 0 0; font-size: 11px; color: var(--dim); }
+
+/* ─── PLAYER VIEW ─── */
+#player-view {
+  position: fixed; inset: 0; z-index: 200;
+  background: #000;
+  display: none; flex-direction: column;
+  opacity: 0; transition: opacity 0.25s;
+}
+#player-view.open { display: flex; }
+#player-view.show { opacity: 1; }
+
+/* Video stage */
+#stage {
+  position: relative; flex: 1; background: #000;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden; cursor: none;
+}
+#stage.cursor-show { cursor: default; }
+#pvideo { width: 100%; height: 100%; object-fit: contain; display: block; }
+
+/* Gradient overlays */
+#stage::before {
+  content: ''; position: absolute; top: 0; left: 0; right: 0; height: 100px;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.7), transparent);
+  z-index: 1; pointer-events: none;
+}
+#stage::after {
+  content: ''; position: absolute; bottom: 0; left: 0; right: 0; height: 200px;
+  background: linear-gradient(to top, rgba(0,0,0,0.85), transparent);
+  z-index: 1; pointer-events: none;
+}
+
+/* Back button */
+#pback {
+  position: absolute; top: 20px; left: 20px; z-index: 5;
+  display: flex; align-items: center; gap: 8px;
+  background: none; border: none; cursor: pointer; color: rgba(255,255,255,0.7);
+  font-family: 'DM Sans', sans-serif; font-size: 13px;
+  transition: color 0.15s; padding: 4px 0;
+}
+#pback:hover { color: #fff; }
+#pback-arrow { font-size: 20px; line-height: 1; }
+
+/* Channel name overlay */
+#pname-overlay {
+  position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+  z-index: 5; text-align: center; pointer-events: none;
+}
+#pname-overlay .pov-name {
+  font-family: 'Syne', sans-serif; font-weight: 700; font-size: 15px;
+  color: #fff; white-space: nowrap;
+}
+#pname-overlay .pov-cat {
+  font-size: 10px; color: rgba(255,255,255,0.4);
+  text-transform: uppercase; letter-spacing: 0.08em; margin-top: 2px;
+}
+
+/* Controls */
+#pcontrols {
+  position: absolute; bottom: 0; left: 0; right: 0; z-index: 5;
+  padding: 0 28px 28px;
+  display: flex; flex-direction: column; gap: 14px;
+  transition: opacity 0.35s, transform 0.35s;
+}
+#pcontrols.fade { opacity: 0; transform: translateY(8px); pointer-events: none; }
+
+/* Progress */
+.pbar-wrap { position: relative; height: 4px; cursor: pointer; }
+.pbar-wrap:hover { height: 6px; margin-top: -2px; }
+.pbar-bg { width: 100%; height: 100%; background: rgba(255,255,255,0.15); border-radius: 10px; overflow: hidden; }
+.pbar-fill { height: 100%; background: var(--accent); border-radius: 10px; transition: width 0.15s linear; }
+.pbar-input {
+  position: absolute; inset: -10px 0; opacity: 0;
+  width: 100%; cursor: pointer; margin: 0;
+}
+
+/* Controls row */
+.pctrl-row { display: flex; align-items: center; gap: 10px; }
+.pcbtn {
+  background: none; border: none; cursor: pointer;
+  color: rgba(255,255,255,0.75); display: flex; align-items: center; justify-content: center;
+  border-radius: 50%; transition: color 0.15s, background 0.15s;
+  flex-shrink: 0;
+}
+.pcbtn:hover { color: #fff; background: rgba(255,255,255,0.08); }
+
+/* BIG play */
+.pcbtn-play {
+  width: 56px; height: 56px; font-size: 0;
+  background: var(--accent) !important;
+  border-radius: 50% !important;
+  color: #05050a !important;
+  position: relative;
+  box-shadow: 0 0 0 0 rgba(232,255,71,0.4);
+  transition: box-shadow 0.2s, transform 0.15s !important;
+}
+.pcbtn-play:hover { transform: scale(1.08) !important; box-shadow: 0 0 0 10px rgba(232,255,71,0.12) !important; }
+.pcbtn-play svg { width: 22px; height: 22px; fill: #05050a; }
+
+.pcbtn-sm { width: 36px; height: 36px; font-size: 15px; }
+.pcbtn-xs { width: 30px; height: 30px; font-size: 13px; }
+
+.ptime {
+  font-size: 12px; color: rgba(255,255,255,0.5);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+  flex: 1; padding-left: 4px;
+}
+.pvol-wrap { display: flex; align-items: center; gap: 6px; }
+.pvol-slider {
+  width: 72px; height: 3px; cursor: pointer;
+  accent-color: var(--accent); border-radius: 10px;
+}
+
+/* ─── PLAYER SHELF ─── */
+#pshelf {
+  flex-shrink: 0;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+.pshelf-info {
+  display: flex; align-items: center; gap: 14px;
+  padding: 14px 24px 10px;
+}
+.pshelf-thumb {
+  width: 44px; height: 44px; border-radius: 8px;
+  background: var(--lift); border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden; flex-shrink: 0; font-size: 20px;
+}
+.pshelf-thumb img { width: 100%; height: 100%; object-fit: contain; }
+.pshelf-name { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 15px; margin-bottom: 4px; }
+.pshelf-tags { display: flex; gap: 5px; flex-wrap: wrap; }
+.stag {
+  height: 19px; padding: 0 7px; border-radius: 4px;
+  font-size: 9px; font-weight: 600; letter-spacing: 0.05em;
+  display: flex; align-items: center; gap: 3px;
+  text-transform: uppercase;
+}
+.stag-g { background: rgba(232,255,71,0.1); color: var(--accent); }
+.stag-c { background: rgba(255,79,123,0.12); color: var(--accent2); }
+.stag-l { background: var(--dim); color: var(--muted); }
+.stag-flag { width: 12px; height: 8px; border-radius: 1px; }
+
+/* Related row */
+.pshelf-related { padding: 0 24px 14px; overflow-x: auto; display: flex; gap: 8px; }
+.pshelf-related::-webkit-scrollbar { display: none; }
+.rchip {
+  display: flex; align-items: center; gap: 7px;
+  padding: 5px 12px 5px 5px;
+  background: var(--lift); border: 1px solid var(--border);
+  border-radius: 100px; cursor: pointer; flex-shrink: 0;
+  transition: border-color 0.15s;
+}
+.rchip:hover { border-color: var(--accent); }
+.rchip-img {
+  width: 26px; height: 26px; border-radius: 50%;
+  background: var(--dim); display: flex; align-items: center; justify-content: center;
+  overflow: hidden; font-size: 12px; flex-shrink: 0;
+}
+.rchip-img img { width: 100%; height: 100%; object-fit: contain; }
+.rchip-name { font-size: 11px; color: var(--text); font-weight: 500; }
+
+/* ─── REFRESH TICKER ─── */
+#ticker {
+  position: fixed; bottom: 16px; right: 16px; z-index: 50;
+  display: none; align-items: center; gap: 7px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 7px 12px;
+  font-size: 11px; color: var(--muted);
+}
+#ticker.show { display: flex; }
+#ticker-accent { color: var(--accent); font-weight: 600; }
+
+/* ─── RESPONSIVE ─── */
+@media (max-width: 640px) {
+  #shell { grid-template-columns: 54px 1fr; }
+  #topbar, #filter-strip, #grid-view { padding-left: 16px; padding-right: 16px; }
+  .channel-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+  #pcontrols { padding: 0 16px 20px; }
+  .pshelf-info { padding: 12px 16px 8px; }
+  .pshelf-related { padding: 0 16px 12px; }
+  #pback { left: 12px; top: 12px; }
+}
+</style>
+</head>
+<body>
+
+<div id="shell">
+
+  <!-- RAIL -->
+  <nav id="rail">
+    <div class="rail-logo">Z</div>
+    <button class="rail-btn active" title="Live TV">📺</button>
+    <div class="rail-sep"></div>
+    <div class="rail-spacer"></div>
+    <button class="rail-btn" title="Refresh" id="rail-refresh" onclick="loadChannels(true)">↻</button>
+  </nav>
+
+  <!-- CONTENT -->
+  <div id="content">
+
+    <!-- TOPBAR -->
+    <div id="topbar">
+      <div class="topbar-title">Live TV</div>
+      <div class="topbar-search">
+        <span class="topbar-search-icon">⌕</span>
+        <input id="search-input" type="text" placeholder="Search channels..." oninput="applyFilters()"/>
+      </div>
+      <div class="topbar-right">
+        <div class="live-badge"><div class="live-dot"></div> LIVE</div>
+        <div class="count-chip" id="count-chip"><span id="count-num">—</span> channels</div>
+      </div>
+    </div>
+
+    <!-- FILTER STRIP -->
+    <div id="filter-strip">
+      <button class="fpill on" data-g="" onclick="setGroup(this,'')">All</button>
+      <div class="fstrip-sep"></div>
+      <select id="country-sel" onchange="applyFilters()">
+        <option value="">All Countries</option>
+      </select>
+    </div>
+
+    <!-- GRID -->
+    <div id="grid-view">
+      <div class="section-label" id="section-label">Channels</div>
+      <div class="channel-grid" id="channel-grid"></div>
+    </div>
+
+  </div><!-- /content -->
+</div><!-- /shell -->
+
+<!-- REFRESH TICKER -->
+<div id="ticker">🔄 Refresh in <span id="ticker-accent">--:--</span></div>
+
+<!-- ═══ PLAYER VIEW ═══ -->
+<div id="player-view">
+
+  <div id="stage">
+    <video id="pvideo" playsinline></video>
+
+    <button id="pback" onclick="closePlayer()">
+      <span id="pback-arrow">←</span>
+      <span>Back</span>
+    </button>
+
+    <div id="pname-overlay">
+      <div class="pov-name" id="pov-name"></div>
+      <div class="pov-cat" id="pov-cat"></div>
+    </div>
+
+    <div id="pcontrols">
+      <div class="pbar-wrap" id="pbar-wrap">
+        <div class="pbar-bg"><div class="pbar-fill" id="pbar-fill" style="width:0%"></div></div>
+        <input type="range" class="pbar-input" id="pbar-input" min="0" max="100" step="0.1" value="0"/>
+      </div>
+      <div class="pctrl-row">
+        <button class="pcbtn pcbtn-play" id="pbtn-play" onclick="togglePlay()">
+          <svg id="play-icon" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+        </button>
+        <button class="pcbtn pcbtn-sm" onclick="skip(-10)" title="−10s">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z"/><text x="12" y="16" text-anchor="middle" font-size="6" fill="currentColor">10</text></svg>
+        </button>
+        <button class="pcbtn pcbtn-sm" onclick="skip(10)" title="+10s">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor"><path d="M12 5V1l5 5-5 5V7c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6h2c0 4.42-3.58 8-8 8s-8-3.58-8-8 3.58-8 8-8z"/><text x="12" y="16" text-anchor="middle" font-size="6" fill="currentColor">10</text></svg>
+        </button>
+        <span class="ptime" id="ptime">— / —</span>
+        <div class="pvol-wrap">
+          <button class="pcbtn pcbtn-xs" onclick="toggleMute()" id="pmute">🔊</button>
+          <input type="range" class="pvol-slider" id="pvol" min="0" max="1" step="0.05" value="1" oninput="setVol(this.value)"/>
+        </div>
+        <button class="pcbtn pcbtn-xs" onclick="goFullscreen()" title="Fullscreen">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
+        </button>
+      </div>
+    </div>
+  </div><!-- /stage -->
+
+  <!-- SHELF -->
+  <div id="pshelf">
+    <div class="pshelf-info" id="pshelf-info"></div>
+    <div class="pshelf-related" id="pshelf-related"></div>
+  </div>
+
+</div><!-- /player-view -->
+
+<script>
+const API = window.location.origin;
+const FLAGCDN = "https://purecatamphetamine.github.io/country-flag-icons/3x2";
+let ALL = [], FILT = [], activeGroup = "", hls = null, ctrlTimer = null, nextRef = null;
+
+/* ══ LOAD ══ */
+async function loadChannels(force = false) {
+  const rb = document.getElementById("rail-refresh");
+  rb.style.opacity = "0.4";
+  showSkeletons();
+  try {
+    const r = await fetch(`${API}/api/channels${force ? "?refresh=true" : ""}`);
+    if (!r.ok) throw new Error("Server error " + r.status);
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    ALL = d.channels.map((c, i) => ({ ...c, _id: "c" + i }));
+    document.getElementById("count-num").textContent = ALL.length.toLocaleString();
+    buildFilters();
+    applyFilters();
+    nextRef = Date.now() + 30 * 60 * 1000;
+    document.getElementById("ticker").classList.add("show");
+    startTicker();
+  } catch (e) {
+    showGridMsg("📡", "Couldn't load channels", e.message, true);
+  } finally {
+    rb.style.opacity = "";
+  }
+}
+
+function showSkeletons() {
+  document.getElementById("channel-grid").innerHTML =
+    Array(20).fill(0).map((_, i) =>
+      `<div class="skel-card" style="animation-delay:${i * 0.03}s">
+        <div class="skel skel-img"></div>
+        <div class="skel-body">
+          <div class="skel skel-line" style="width:75%"></div>
+          <div class="skel skel-line" style="width:45%"></div>
+        </div>
+      </div>`
+    ).join("");
+}
+
+function showGridMsg(icon, title, sub, withBtn) {
+  document.getElementById("channel-grid").innerHTML =
+    `<div class="grid-msg">
+      <div class="grid-msg-icon">${icon}</div>
+      <div class="grid-msg-title">${esc(title)}</div>
+      <div class="grid-msg-sub">${esc(sub)}</div>
+      ${withBtn ? `<button class="grid-msg-btn" onclick="loadChannels()">Try again</button>` : ""}
+    </div>`;
+}
+
+/* ══ FILTERS ══ */
+function buildFilters() {
+  const groups = [...new Set(ALL.map(c => c.group).filter(Boolean))].sort();
+  const countries = [...new Set(ALL.map(c => c.country).filter(Boolean))].sort();
+
+  const strip = document.getElementById("filter-strip");
+  // Remove old pills (keep country select)
+  [...strip.querySelectorAll(".fpill, .fstrip-sep")].forEach(e => e.remove());
+
+  const allBtn = mkPill("All", "");
+  allBtn.classList.add("on");
+  strip.insertBefore(allBtn, strip.querySelector("#country-sel"));
+
+  const sep = document.createElement("div");
+  sep.className = "fstrip-sep";
+  strip.insertBefore(sep, strip.querySelector("#country-sel"));
+
+  groups.slice(0, 18).forEach(g => {
+    strip.insertBefore(mkPill(g, g), strip.querySelector("#country-sel"));
+  });
+
+  const sep2 = document.createElement("div"); sep2.className = "fstrip-sep";
+  strip.insertBefore(sep2, strip.querySelector("#country-sel"));
+
+  const csel = document.getElementById("country-sel");
+  csel.innerHTML = `<option value="">All Countries</option>` +
+    countries.map(c => `<option value="${escA(c)}">${esc(c)}</option>`).join("");
+}
+
+function mkPill(label, group) {
+  const b = document.createElement("button");
+  b.className = "fpill"; b.textContent = label; b.dataset.g = group;
+  b.onclick = () => setGroup(b, group);
+  return b;
+}
+
+function setGroup(el, g) {
+  activeGroup = g;
+  document.querySelectorAll(".fpill").forEach(p => p.classList.toggle("on", p.dataset.g === g));
+  applyFilters();
+}
+
+function applyFilters() {
+  const q = (document.getElementById("search-input").value || "").toLowerCase().trim();
+  const country = document.getElementById("country-sel").value;
+  FILT = ALL.filter(c => {
+    if (activeGroup && c.group !== activeGroup) return false;
+    if (country && c.country !== country) return false;
+    if (q && !c.name.toLowerCase().includes(q) && !(c.group || "").toLowerCase().includes(q)) return false;
+    return true;
+  });
+  document.getElementById("section-label").textContent =
+    FILT.length.toLocaleString() + " channel" + (FILT.length !== 1 ? "s" : "");
+  renderGrid();
+}
+
+/* ══ GRID ══ */
+function renderGrid() {
+  const grid = document.getElementById("channel-grid");
+  const shown = FILT.slice(0, 300);
+  if (!shown.length) {
+    showGridMsg("🔍", "No channels found", "Try a different search or filter", false);
+    return;
+  }
+  grid.innerHTML = shown.map((ch, i) => {
+    const img = ch.logo
+      ? `<img src="${escA(ch.logo)}" alt="" loading="lazy" onerror="this.style.display='none'"/>`
+      : `<span class="ccard-placeholder">📺</span>`;
+    const flag = ch.country && ch.country.length === 2
+      ? `<img class="ccard-flag" src="${FLAGCDN}/${ch.country.toUpperCase()}.svg" onerror="this.style.display='none'"/>`
+      : "";
+    return `<div class="ccard" style="animation-delay:${Math.min(i * 0.025, 0.5)}s" onclick="openPlayer('${ch._id}')">
+      <div class="ccard-img">${img}</div>
+      <div class="ccard-body">
+        <div class="ccard-name">${esc(ch.name)}</div>
+        <div class="ccard-foot">
+          <span class="ccard-cat">${esc(ch.group || "")}</span>
+          ${flag}
+        </div>
+      </div>
+    </div>`;
+  }).join("") + (FILT.length > 300
+    ? `<div class="more-cap">Showing 300 of ${FILT.length.toLocaleString()} — refine search to find more</div>`
+    : "");
+}
+
+/* ══ PLAYER ══ */
+function openPlayer(id) {
+  const ch = ALL.find(c => c._id === id);
+  if (!ch) return;
+
+  document.getElementById("pov-name").textContent = ch.name;
+  document.getElementById("pov-cat").textContent = ch.group || "";
+
+  // Shelf info
+  const logo = ch.logo
+    ? `<img src="${escA(ch.logo)}" alt="" onerror="this.style.display='none'"/>`
+    : "📺";
+  const flag = ch.country && ch.country.length === 2
+    ? `<img class="stag-flag" src="${FLAGCDN}/${ch.country.toUpperCase()}.svg" onerror="this.style.display='none'"/>`
+    : "";
+  document.getElementById("pshelf-info").innerHTML =
+    `<div class="pshelf-thumb">${logo}</div>
+     <div>
+       <div class="pshelf-name">${esc(ch.name)}</div>
+       <div class="pshelf-tags">
+         ${ch.group ? `<span class="stag stag-g">${esc(ch.group)}</span>` : ""}
+         ${ch.country ? `<span class="stag stag-c">${flag} ${esc(ch.country)}</span>` : ""}
+         ${ch.language ? `<span class="stag stag-l">${esc(ch.language)}</span>` : ""}
+       </div>
+     </div>`;
+
+  // Related
+  const rel = ALL.filter(c => c.group === ch.group && c._id !== ch._id).slice(0, 14);
+  document.getElementById("pshelf-related").innerHTML = rel.map(r => {
+    const ri = r.logo ? `<img src="${escA(r.logo)}" onerror="this.style.display='none'"/>` : "📺";
+    return `<div class="rchip" onclick="openPlayer('${r._id}')">
+      <div class="rchip-img">${ri}</div>
+      <span class="rchip-name">${esc(r.name)}</span>
+    </div>`;
+  }).join("");
+
+  // Show overlay
+  const ov = document.getElementById("player-view");
+  ov.style.display = "flex";
+  requestAnimationFrame(() => ov.classList.add("show"));
+  document.body.style.overflow = "hidden";
+
+  startStream(ch.url);
+  initCtrlFade();
+}
+
+function closePlayer() {
+  const ov = document.getElementById("player-view");
+  ov.classList.remove("show");
+  setTimeout(() => { ov.style.display = "none"; }, 280);
+  document.body.style.overflow = "";
+  stopStream();
+  clearTimeout(ctrlTimer);
+}
+
+function startStream(url) {
+  const v = document.getElementById("pvideo");
+  stopStream();
+  if (typeof Hls !== "undefined" && Hls.isSupported()) {
+    hls = new Hls({ enableWorker: false });
+    hls.loadSource(url);
+    hls.attachMedia(v);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => v.play().catch(() => {}));
+    hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) console.warn("HLS", d.type); });
+  } else if (v.canPlayType("application/vnd.apple.mpegurl")) {
+    v.src = url; v.play().catch(() => {});
+  }
+  v.onplay = v.onpause = syncPlayBtn;
+  v.ontimeupdate = syncProgress;
+}
+
+function stopStream() {
+  const v = document.getElementById("pvideo");
+  if (hls) { hls.destroy(); hls = null; }
+  v.pause(); v.src = "";
+  v.onplay = v.onpause = v.ontimeupdate = null;
+}
+
+/* ══ CONTROLS ══ */
+function togglePlay() {
+  const v = document.getElementById("pvideo");
+  v.paused ? v.play() : v.pause();
+}
+function syncPlayBtn() {
+  const v = document.getElementById("pvideo");
+  const icon = document.getElementById("play-icon");
+  icon.innerHTML = v.paused
+    ? '<path d="M8 5v14l11-7z"/>'
+    : '<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>';
+}
+function skip(s) {
+  const v = document.getElementById("pvideo");
+  v.currentTime = Math.max(0, (v.currentTime || 0) + s);
+}
+function syncProgress() {
+  const v = document.getElementById("pvideo");
+  if (!v.duration || isNaN(v.duration)) return;
+  const p = (v.currentTime / v.duration) * 100;
+  document.getElementById("pbar-fill").style.width = p + "%";
+  document.getElementById("pbar-input").value = p;
+  document.getElementById("ptime").textContent = `${fmt(v.currentTime)} / ${fmt(v.duration)}`;
+}
+document.getElementById("pbar-input").addEventListener("input", function () {
+  const v = document.getElementById("pvideo");
+  if (v.duration) v.currentTime = (this.value / 100) * v.duration;
+});
+function setVol(val) {
+  document.getElementById("pvideo").volume = parseFloat(val);
+  document.getElementById("pmute").textContent = val == 0 ? "🔇" : "🔊";
+}
+function toggleMute() {
+  const v = document.getElementById("pvideo");
+  v.muted = !v.muted;
+  document.getElementById("pmute").textContent = v.muted ? "🔇" : "🔊";
+}
+function goFullscreen() {
+  const s = document.getElementById("stage");
+  if (!document.fullscreenElement) s.requestFullscreen().catch(() => {});
+  else document.exitFullscreen();
+}
+function fmt(s) {
+  if (!s || isNaN(s)) return "—";
+  const m = Math.floor(s / 60), sec = Math.floor(s % 60);
+  return `${m}:${sec.toString().padStart(2, "0")}`;
+}
+
+/* Controls fade */
+function initCtrlFade() {
+  const ctrl = document.getElementById("pcontrols");
+  const stage = document.getElementById("stage");
+  clearTimeout(ctrlTimer);
+  ctrl.classList.remove("fade");
+  stage.classList.add("cursor-show");
+
+  const hide = () => {
+    ctrlTimer = setTimeout(() => {
+      ctrl.classList.add("fade");
+      stage.classList.remove("cursor-show");
+    }, 3200);
+  };
+  const show = () => {
+    ctrl.classList.remove("fade");
+    stage.classList.add("cursor-show");
+    clearTimeout(ctrlTimer); hide();
+  };
+  stage.onmousemove = show;
+  stage.ontouchstart = show;
+  hide();
+}
+
+/* ══ TICKER ══ */
+function startTicker() {
+  clearInterval(window._ticker);
+  window._ticker = setInterval(() => {
+    if (!nextRef) return;
+    const d = nextRef - Date.now();
+    if (d <= 0) { loadChannels(); return; }
+    const m = Math.floor(d / 60000), s = Math.floor((d % 60000) / 1000);
+    document.getElementById("ticker-accent").textContent = `${m}:${s.toString().padStart(2, "0")}`;
+  }, 1000);
+}
+
+/* ══ KEYBOARD ══ */
+document.addEventListener("keydown", e => {
+  const playerOpen = document.getElementById("player-view").classList.contains("show");
+  if (e.key === "Escape" && playerOpen) closePlayer();
+  if (e.key === " " && playerOpen) { e.preventDefault(); togglePlay(); }
+  if (e.key === "ArrowLeft" && playerOpen) skip(-10);
+  if (e.key === "ArrowRight" && playerOpen) skip(10);
+});
+
+/* ══ UTILS ══ */
+function esc(s) {
+  return (s || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+function escA(s) { return (s || "").replace(/"/g, "&quot;"); }
+
+// Boot
+loadChannels();
+</script>
+</body>
+</html>
