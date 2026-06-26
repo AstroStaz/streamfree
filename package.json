@@ -1,0 +1,12 @@
+{
+  "name": "streamfree",
+  "version": "1.0.0",
+  "description": "Free IPTV player powered by iptv-org",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=14"
+  }
+}
