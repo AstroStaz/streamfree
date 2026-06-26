@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>StreamFree</title>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; overflow: hidden; background: #0a0a0f; color: #e8e8f0; font-family: 'Inter', 'Segoe UI', system-ui, sans-serif; }
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: #0e0e18; }
+  ::-webkit-scrollbar-thumb { background: #2a2a3e; border-radius: 4px; }
+  #app { display: flex; flex-direction: column; height: 100vh; }
+  header { background: linear-gradient(135deg,#12121a,#1a1a2e); border-bottom:1px solid #2a2a3e; padding:12px 18px; display:flex; align-items:center; justify-content:space-between; gap:10px; flex-shrink:0; flex-wrap:wrap; }
+  .logo-wrap { display:flex; align-items:center; gap:10px; }
+  .logo-icon { width:34px; height:34px; background:linear-gradient(135deg,#6c63ff,#e040fb); border-radius:8px; display:flex; align-items:center; justify-content:center; font-size:16px; flex-shrink:0; }
+  .logo-title { font-weight:700; font-size:15px; }
+  .logo-sub { font-size:10px; color:#555; margin-top:1px; }
+  .header-actions { display:flex; align-items:center; gap:8px; }
+  .countdown-badge { font-size:11px; color:#888; background:#1e1e2e; border:1px solid #2a2a3e; border-radius:7px; padding:5px 9px; }
+  .countdown-badge span { color:#6c63ff; font-weight:600; }
+  button.btn-primary { background:linear-gradient(135deg,#6c63ff,#e040fb); border:none; border-radius:8px; color:#fff; padding:7px 14px; font-size:12px; font-weight:600; cursor:pointer; }
+  button.btn-primary:disabled { opacity:0.5; cursor:not-allowed; }
+  .body { display:flex; flex:1; overflow:hidden; }
+  aside { width:270px; min-width:200px; background:#0e0e18; border-right:1px solid #1e1e2e; display:flex; flex-direction:column; overflow:hidden; }
+  .search-wrap { padding:11px 13px; border-bottom:1px solid #1e1e2e; position:relative; }
+  .search-icon { position:absolute; left:22px; top:50%; transform:translateY(-50%); color:#444; font-size:13px; pointer-events:none; }
+  .search-wrap input { width:100%; background:#1a1a28; border:1px solid #2a2a3e; border-radius:8px; color:#e8e8f0; padding:7px 9px 7px 30px; font-size:12px; outline:none; }
+  .search-wrap input::placeholder { color:#333; }
+  .filters { padding:9px 13px; border-bottom:1px solid #1e1e2e; display:flex; flex-direction:column; gap:6px; flex-shrink:0; }
+  .filters select { background:#1a1a28; border:1px solid #2a2a3e; border-radius:7px; color:#e8e8f0; padding:6px 9px; font-size:11px; outline:none; cursor:pointer; width:100%; }
+  .result-count { font-size:10px; color:#333; text-align:right; }
+  .channel-list { flex:1; overflow-y:auto; }
+  .ch-row { display:flex; align-items:center; gap:9px; padding:8px 11px; cursor:pointer; border-bottom:1px solid #111119; border-left:3px solid transparent; transition:background 0.1s; }
+  .ch-row:hover { background:#161626; }
+  .ch-row.active { background:linear-gradient(90deg,#1e1a3e88,#1a1a2888); border-left-color:#6c63ff; }
+  .ch-thumb { width:30px; height:30px; flex-shrink:0; border-radius:6px; background:#1a1a28; display:flex; align-items:center; justify-content:center; overflow:hidden; border:1px solid #222230; font-size:13px; }
+  .ch-thumb img { width:100%; height:100%; object-fit:contain; }
+  .ch-info { flex:1; min-width:0; }
+  .ch-name { font-size:12px; font-weight:500; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; color:#ccc; }
+  .ch-row.active .ch-name { color:#c4b8ff; }
+  .ch-meta { font-size:10px; color:#3a3a55; margin-top:1px; display:flex; align-items:center; gap:3px; overflow:hidden; }
+  .ch-meta img { width:11px; height:7px; border-radius:1px; flex-shrink:0; }
+  .ch-meta span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .status-dot { width:6px; height:6px; border-radius:50%; flex-shrink:0; background:#222235; }
+  .status-dot.live { background:#00e676; box-shadow:0 0 5px #00e676; }
+  .status-dot.dead { background:#ff1744; }
+  .ch-more { padding:10px; text-align:center; color:#333; font-size:10px; }
+  .loading-state { padding:20px; text-align:center; }
+  .loading-state .icon { font-size:32px; margin-bottom:8px; }
+  .loading-state .msg { font-size:12px; color:#555; margin-bottom:12px; }
+  .progress-bar { height:3px; background:#1e1e2e; border-radius:3px; overflow:hidden; }
+  .progress-fill { height:100%; width:40%; background:linear-gradient(90deg,#6c63ff,#e040fb); border-radius:3px; animation:shimmer 1.4s infinite; }
+  @keyframes shimmer { 0%{transform:translateX(-200%)} 100%{transform:translateX(400%)} }
+  .error-state { padding:14px; }
+  .error-msg { color:#ff6b6b; font-size:12px; line-height:1.6; margin-bottom:10px; }
+  .error-msg code { background:#1a1a28; padding:2px 5px; border-radius:4px; font-size:11px; color:#aaa; }
+  .btn-retry { background:linear-gradient(135deg,#6c63ff,#e040fb); border:none; border-radius:7px; color:#fff; padding:7px 14px; font-size:12px; font-weight:600; cursor:pointer; width:100%; }
+  main { flex:1; display:flex; flex-direction:column; overflow:hidden; min-width:0; }
+  .empty-state { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; }
+  .empty-state .icon { font-size:52px; }
+  .empty-state .title { font-size:17px; font-weight:600; color:#333; }
+  .empty-state .sub { font-size:12px; color:#252535; }
+  .player-wrap { background:#000; width:100%; aspect-ratio:16/9; max-height:58vh; flex-shrink:0; }
+  video { width:100%; height:100%; display:block; }
+  .channel-info { padding:12px 18px; border-bottom:1px solid #1e1e2e; background:#0e0e18; flex-shrink:0; }
+  .channel-info-inner { display:flex; align-items:center; gap:11px; }
+  .info-thumb { width:40px; height:40px; border-radius:8px; background:#1a1a28; display:flex; align-items:center; justify-content:center; overflow:hidden; border:1px solid #2a2a3e; flex-shrink:0; font-size:18px; }
+  .info-thumb img { width:100%; height:100%; object-fit:contain; }
+  .info-text { min-width:0; }
+  .info-name { font-weight:700; font-size:15px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .info-tags { display:flex; gap:5px; margin-top:4px; flex-wrap:wrap; }
+  .tag { border-radius:4px; padding:2px 6px; font-size:10px; display:flex; align-items:center; gap:3px; }
+  .tag.group { background:#1e1a3e; color:#c4b8ff; }
+  .tag.country { background:#1a2a1a; color:#69e060; }
+  .tag.lang { background:#1a1a2a; color:#555; }
+  .tag img { width:11px; height:7px; }
+  .related { flex:1; overflow-y:auto; padding:12px 16px; }
+  .related-title { font-size:10px; color:#333; font-weight:600; letter-spacing:0.07em; text-transform:uppercase; margin-bottom:9px; }
+  .related-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(130px,1fr)); gap:7px; }
+  .rel-card { background:#0e0e18; border:1px solid #1e1e2e; border-radius:8px; padding:8px 10px; cursor:pointer; display:flex; align-items:center; gap:7px; transition:border-color 0.15s; }
+  .rel-card:hover { border-color:#6c63ff; }
+  .rel-thumb { width:24px; height:24px; border-radius:4px; background:#1a1a28; display:flex; align-items:center; justify-content:center; overflow:hidden; flex-shrink:0; font-size:11px; }
+  .rel-thumb img { width:100%; height:100%; object-fit:contain; }
+  .rel-name { font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#bbb; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="logo-wrap">
+      <div class="logo-icon">📺</div>
+      <div>
+        <div class="logo-title">StreamFree</div>
+        <div class="logo-sub" id="logo-sub">Starting...</div>
+      </div>
+    </div>
+    <div class="header-actions">
+      <div class="countdown-badge" id="countdown-badge" style="display:none">🔄 <span id="countdown"></span></div>
+      <button class="btn-primary" id="refresh-btn" onclick="loadChannels(true)" disabled>↻ Refresh</button>
+    </div>
+  </header>
+
+  <div class="body">
+    <aside>
+      <div class="search-wrap">
+        <span class="search-icon">🔍</span>
+        <input type="text" id="search" placeholder="Search channels..." oninput="applyFilters()" />
+      </div>
+      <div class="filters">
+        <select id="group-filter" onchange="applyFilters()"><option value="">All Categories</option></select>
+        <select id="country-filter" onchange="applyFilters()"><option value="">All Countries</option></select>
+        <div class="result-count" id="result-count">0 results</div>
+      </div>
+      <div class="channel-list" id="channel-list">
+        <div class="loading-state">
+          <div class="icon">📡</div>
+          <div class="msg">Connecting to server...</div>
+          <div class="progress-bar"><div class="progress-fill"></div></div>
+        </div>
+      </div>
+    </aside>
+
+    <main id="main">
+      <div class="empty-state">
+        <div class="icon">📡</div>
+        <div class="title">Pick a channel to watch</div>
+        <div class="sub" id="empty-sub">Loading channels...</div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script>
+// Auto-detect API base — works on Replit AND localhost
+const API = window.location.origin;
+const FLAG_BASE = "https://purecatamphetamine.github.io/country-flag-icons/3x2";
+
+let allChannels = [], filtered = [], activeChannel = null, hls = null, nextRefresh = null;
+
+function getFlag(code) {
+  if (!code || code.length !== 2) return null;
+  return `${FLAG_BASE}/${code.toUpperCase()}.svg`;
+}
+
+async function loadChannels(force = false) {
+  const btn = document.getElementById("refresh-btn");
+  const sub = document.getElementById("logo-sub");
+  const list = document.getElementById("channel-list");
+
+  btn.disabled = true;
+  btn.textContent = "⏳ Loading";
+  sub.textContent = "Fetching playlist...";
+  list.innerHTML = `<div class="loading-state"><div class="icon">📡</div><div class="msg">Fetching playlist...</div><div class="progress-bar"><div class="progress-fill"></div></div></div>`;
+
+  try {
+    const res = await fetch(`${API}/api/channels${force ? "?refresh=true" : ""}`);
+    if (!res.ok) throw new Error(`Server returned ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    allChannels = data.channels.map((ch, i) => ({ ...ch, id: `ch-${i}` }));
+    sub.textContent = `${allChannels.length.toLocaleString()} channels · ${new Date(data.cached_at).toLocaleTimeString()}`;
+
+    nextRefresh = Date.now() + 30 * 60 * 1000;
+    document.getElementById("countdown-badge").style.display = "";
+    startCountdown();
+    populateFilters();
+    applyFilters();
+
+    btn.disabled = false;
+    btn.textContent = "↻ Refresh";
+    const es = document.getElementById("empty-sub");
+    if (es) es.textContent = `${allChannels.length.toLocaleString()} free channels ready`;
+
+  } catch (e) {
+    console.error(e);
+    list.innerHTML = `<div class="error-state"><div class="error-msg">⚠️ ${e.message}<br><br>Make sure the server is running. In the Replit Shell:<br><code>node server.js</code></div><button class="btn-retry" onclick="loadChannels()">Try Again</button></div>`;
+    sub.textContent = "Connection failed";
+    btn.disabled = false;
+    btn.textContent = "↻ Retry";
+  }
+}
+
+function populateFilters() {
+  const groups = Array.from(new Set(allChannels.map(c => c.group).filter(Boolean))).sort();
+  const countries = Array.from(new Set(allChannels.map(c => c.country).filter(Boolean))).sort();
+  document.getElementById("group-filter").innerHTML = `<option value="">All Categories</option>` + groups.map(g => `<option value="${escAttr(g)}">${escHtml(g)}</option>`).join("");
+  document.getElementById("country-filter").innerHTML = `<option value="">All Countries</option>` + countries.map(c => `<option value="${escAttr(c)}">${escHtml(c)}</option>`).join("");
+}
+
+function applyFilters() {
+  const q = document.getElementById("search").value.toLowerCase().trim();
+  const g = document.getElementById("group-filter").value;
+  const c = document.getElementById("country-filter").value;
+  filtered = allChannels.filter(ch => {
+    if (g && ch.group !== g) return false;
+    if (c && ch.country !== c) return false;
+    if (q && !ch.name.toLowerCase().includes(q) && !(ch.group||"").toLowerCase().includes(q) && !(ch.country||"").toLowerCase().includes(q)) return false;
+    return true;
+  });
+  document.getElementById("result-count").textContent = `${filtered.length.toLocaleString()} results`;
+  renderList();
+}
+
+function renderList() {
+  const list = document.getElementById("channel-list");
+  const shown = filtered.slice(0, 300);
+  if (!shown.length) { list.innerHTML = `<div style="padding:16px;text-align:center;color:#333;font-size:12px;">No channels found</div>`; return; }
+  list.innerHTML = shown.map(ch => {
+    const flag = ch.country && ch.country.length === 2 ? `<img src="${FLAG_BASE}/${ch.country.toUpperCase()}.svg" onerror="this.style.display='none'" />` : "";
+    const logo = ch.logo ? `<img src="${escAttr(ch.logo)}" onerror="this.style.display='none'" />` : "📺";
+    const isActive = activeChannel?.id === ch.id;
+    const dot = ch.status === "live" ? "live" : ch.status === "dead" ? "dead" : "";
+    return `<div class="ch-row${isActive?" active":""}" onclick="playChannel('${ch.id}')">
+      <div class="ch-thumb">${logo}</div>
+      <div class="ch-info">
+        <div class="ch-name">${escHtml(ch.name)}</div>
+        <div class="ch-meta">${flag}<span>${escHtml(ch.group)}</span></div>
+      </div>
+      <div class="status-dot ${dot}"></div>
+    </div>`;
+  }).join("") + (filtered.length > 300 ? `<div class="ch-more">Showing 300 of ${filtered.length.toLocaleString()} — refine search</div>` : "");
+}
+
+function playChannel(id) {
+  activeChannel = allChannels.find(ch => ch.id === id);
+  if (!activeChannel) return;
+  renderList();
+  renderPlayer();
+}
+
+function renderPlayer() {
+  const ch = activeChannel;
+  const flag = ch.country && ch.country.length === 2 ? `<img src="${FLAG_BASE}/${ch.country.toUpperCase()}.svg" style="width:11px;height:7px" onerror="this.style.display='none'" />` : "";
+  const logo = ch.logo ? `<img src="${escAttr(ch.logo)}" style="width:100%;height:100%;object-fit:contain" onerror="this.style.display='none'" />` : "📺";
+  const related = allChannels.filter(c => c.group === ch.group && c.id !== ch.id).slice(0, 16);
+  const relCards = related.map(r => {
+    const rLogo = r.logo ? `<img src="${escAttr(r.logo)}" onerror="this.style.display='none'" style="width:100%;height:100%;object-fit:contain" />` : "📺";
+    return `<div class="rel-card" onclick="playChannel('${r.id}')"><div class="rel-thumb">${rLogo}</div><div class="rel-name">${escHtml(r.name)}</div></div>`;
+  }).join("");
+
+  document.getElementById("main").innerHTML = `
+    <div class="player-wrap"><video id="video" controls autoplay></video></div>
+    <div class="channel-info"><div class="channel-info-inner">
+      <div class="info-thumb">${logo}</div>
+      <div class="info-text">
+        <div class="info-name">${escHtml(ch.name)}</div>
+        <div class="info-tags">
+          ${ch.group?`<span class="tag group">${escHtml(ch.group)}</span>`:""}
+          ${ch.country?`<span class="tag country">${flag} ${ch.country}</span>`:""}
+          ${ch.language?`<span class="tag lang">${escHtml(ch.language)}</span>`:""}
+        </div>
+      </div>
+    </div></div>
+    <div class="related">
+      <div class="related-title">More from ${escHtml(ch.group)}</div>
+      <div class="related-grid">${relCards}</div>
+    </div>`;
+
+  startVideo(ch.url);
+}
+
+function startVideo(streamUrl) {
+  const video = document.getElementById("video");
+  if (!video) return;
+  if (hls) { hls.destroy(); hls = null; }
+  if (typeof Hls !== "undefined" && Hls.isSupported()) {
+    hls = new Hls({ enableWorker: false });
+    hls.loadSource(streamUrl);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(()=>{}));
+    hls.on(Hls.Events.ERROR, (_, d) => { if (d.fatal) console.warn("HLS error", d.type); });
+  } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+    video.src = streamUrl;
+    video.play().catch(()=>{});
+  }
+}
+
+function startCountdown() {
+  clearInterval(window._cdTimer);
+  window._cdTimer = setInterval(() => {
+    if (!nextRefresh) return;
+    const diff = nextRefresh - Date.now();
+    if (diff <= 0) { document.getElementById("countdown").textContent = "Refreshing..."; loadChannels(); return; }
+    const m = Math.floor(diff/60000), s = Math.floor((diff%60000)/1000);
+    document.getElementById("countdown").textContent = `${m}m ${s.toString().padStart(2,"0")}s`;
+  }, 1000);
+}
+
+function escHtml(s) { return (s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+function escAttr(s) { return (s||"").replace(/"/g,"&quot;"); }
+
+loadChannels();
+</script>
+</body>
+</html>
