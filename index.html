@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=yes" />
+    <title>NovaTV — Watch the World Live</title>
+
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,300;14..32,400;14..32,500;14..32,600;14..32,700;14..32,800;14..32,900&display=swap" rel="stylesheet" />
+
+    <!-- HLS.js -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.8/dist/hls.min.js">
+    </script>
+
+    <!-- Styles -->
+    <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+    <div id="app">
+
+        <!-- ===== TOP NAVIGATION ===== -->
+        <nav class="top-nav" role="navigation" aria-label="Main navigation">
+            <div class="nav-left">
+                <div class="nav-brand" id="brand" tabindex="0" role="button" aria-label="Go to homepage">
+                    <div class="logo-icon">📺</div>
+                    <span class="brand-name">NovaTV</span>
+                    <span class="brand-tag" id="channelCount">Loading...</span>
+                </div>
+            </div>
+
+            <div class="nav-center">
+                <div class="search-wrap">
+                    <span class="search-icon">🔍</span>
+                    <input type="text" id="searchInput" placeholder="Search channels, countries, categories..." aria-label="Search channels" autocomplete="off" />
+                </div>
+                <select id="countryFilter" aria-label="Filter by country">
+                    <option value="">All Countries</option>
+                </select>
+                <button class="btn-ghost" id="favToggle" aria-label="Toggle favorites filter">
+                    <span class="fav-icon">☆</span> Favorites
+                </button>
+            </div>
+
+            <div class="nav-right">
+                <div class="countdown-badge" id="countdownBadge" style="display:none">
+                    🔄 <span id="countdownText">--</span>
+                </div>
+                <button class="btn-ghost" id="refreshBtn" onclick="loadChannels(true)" disabled aria-label="Refresh channels">↻</button>
+                <button class="btn-ghost" id="settingsBtn" aria-label="Open settings">⚙</button>
+            </div>
+        </nav>
+
+        <!-- ===== MAIN CONTENT ===== -->
+        <main class="main-content" id="mainContent">
+
+            <!-- HERO SECTION -->
+            <section class="hero" id="heroSection" onclick="playFeatured()" role="button" tabindex="0" aria-label="Play featured channel">
+                <div class="hero-glow"></div>
+                <div class="hero-content">
+                    <div class="hero-thumb" id="heroThumb">📡</div>
+                    <div class="hero-text">
+                        <div class="hero-label">🌟 Featured</div>
+                        <h1 class="hero-title" id="heroTitle">Select a channel to watch</h1>
+                        <div class="hero-meta" id="heroMeta">
+                            <span class="tag">Loading channels...</span>
+                        </div>
+                    </div>
+                    <div class="hero-cta">
+                        Watch Now <span class="arrow">→</span>
+                    </div>
+                </div>
+                <div class="hero-live-badge" id="heroLiveBadge" style="display:none">● LIVE</div>
+            </section>
+
+            <!-- CATEGORY SECTIONS (rendered by JS) -->
+            <div id="categorySections"></div>
+
+        </main>
+
+        <!-- ===== PLAYER OVERLAY ===== -->
+        <div class="player-overlay" id="playerOverlay" role="dialog" aria-label="Video player">
+            <button class="close-btn" id="closePlayerBtn" aria-label="Close player">✕</button>
+            <div class="player-wrap">
+                <video id="playerVideo" playsinline preload="metadata"></video>
+                <div class="player-controls" id="playerControls">
+                    <div class="controls-top">
+                        <span class="time" id="currentTime">0:00</span>
+                        <div class="progress-wrap" id="progressWrap" role="slider" aria-label="Seek" tabindex="0">
+                            <div class="buffered" id="bufferedBar"></div>
+                            <div class="fill" id="progressFill"></div>
+                        </div>
+                        <span class="time" id="durationTime">0:00</span>
+                    </div>
+                    <div class="controls-bottom">
+                        <button class="ctrl-btn play-btn" id="ctrlPlay" aria-label="Play / Pause">▶</button>
+                        <button class="ctrl-btn skip-btn" id="ctrlSkipBack" aria-label="Skip back 10 seconds">⏪</button>
+                        <button class="ctrl-btn skip-btn" id="ctrlSkipForward" aria-label="Skip forward 10 seconds">⏩</button>
+                        <div class="volume-wrap">
+                            <button class="ctrl-btn vol-btn" id="ctrlVol" aria-label="Mute / Unmute">🔊</button>
+                            <input type="range" class="volume-slider" id="volSlider" min="0" max="1" step="0.05" value="1" aria-label="Volume" />
+                        </div>
+                        <span class="channel-label" id="playerChannelLabel">—</span>
+                        <div class="spacer"></div>
+                        <button class="ctrl-btn fs-btn" id="ctrlFullscreen" aria-label="Toggle fullscreen">⛶</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ===== TOAST NOTIFICATION ===== -->
+        <div class="toast" id="toast" role="alert" aria-live="polite"></div>
+
+        <!-- ===== SETTINGS PANEL ===== -->
+        <div class="settings-panel" id="settingsPanel" role="dialog" aria-label="Settings">
+            <div class="settings-content">
+                <div class="settings-header">
+                    <h2>Settings</h2>
+                    <button class="close-settings" id="closeSettings">✕</button>
+                </div>
+                <div class="settings-body">
+                    <div class="setting-group">
+                        <label>Theme</label>
+                        <div class="theme-options">
+                            <button class="theme-opt active" data-theme="dark">Dark</button>
+                            <button class="theme-opt" data-theme="light">Light</button>
+                            <button class="theme-opt" data-theme="glass">Glass</button>
+                        </div>
+                    </div>
+                    <div class="setting-group">
+                        <label>Accent Color</label>
+                        <div class="accent-options">
+                            <button class="accent-opt active" data-accent="#3B82F6">🔵</button>
+                            <button class="accent-opt" data-accent="#00E6A8">🟢</button>
+                            <button class="accent-opt" data-accent="#FF5A5F">🔴</button>
+                            <button class="accent-opt" data-accent="#FFC857">🟡</button>
+                            <button class="accent-opt" data-accent="#A78BFA">🟣</button>
+                        </div>
+                    </div>
+                    <div class="setting-group">
+                        <label>
+                            <input type="checkbox" id="autoPlayToggle" checked /> Auto-play on channel select
+                        </label>
+                    </div>
+                    <div class="setting-group">
+                        <label>
+                            <input type="checkbox" id="rememberVolumeToggle" checked /> Remember volume
+                        </label>
+                    </div>
+                    <div class="setting-group">
+                        <button class="btn-clear-history" id="clearHistoryBtn">Clear Watch History</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- JavaScript -->
+    <script src="app.js"></script>
+</body>
+</html>
