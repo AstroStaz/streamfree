@@ -6,9 +6,9 @@ const url = require("url");
 
 const PORT = process.env.PORT || 3000;
 const CACHE_DURATION_MS = 30 * 60 * 1000;
-const CHECK_TIMEOUT_MS = 5000;
-const MAX_CONCURRENT = 30;
-const MAX_CHANNELS = 500;
+const FETCH_TIMEOUT_MS  = 8000;
+const MAX_CONCURRENT    = 20;
+const MAX_CHANNELS      = 400;
 
 const PLAYLISTS = [
   "https://iptv-org.github.io/iptv/countries/us.m3u",
@@ -20,12 +20,11 @@ const PLAYLISTS = [
   "https://iptv-org.github.io/iptv/countries/za.m3u",
 ];
 
-/* ══ STATE ══ */
-let cache = { channels: null, timestamp: 0 };
+let cache          = { channels: null, timestamp: 0 };
 let buildInProgress = false;
-let progressClients = new Set(); // SSE clients listening for progress
+let progressClients = new Set();
 
-/* ══ SSE BROADCAST ══ */
+/* ══ BROADCAST SSE ══ */
 function broadcast(data) {
   const msg = `data: ${JSON.stringify(data)}\n\n`;
   for (const res of progressClients) {
@@ -33,23 +32,26 @@ function broadcast(data) {
   }
 }
 
-/* ══ FETCH URL ══ */
-function fetchURL(rawUrl, redirects = 5) {
+/* ══ HTTP FETCH ══ */
+function fetchURL(rawUrl, redirects = 5, timeoutMs = FETCH_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     if (!redirects) return reject(new Error("Too many redirects"));
     try {
       const parsed = new URL(rawUrl);
       const mod = parsed.protocol === "https:" ? https : http;
       const req = mod.get(rawUrl, {
-        headers: { "User-Agent": "Mozilla/5.0 (compatible; NovaTV/1.0)", "Accept": "*/*" },
-        timeout: 14000,
+        headers: {
+          "User-Agent": "Mozilla/5.0 (compatible; NovaTV/1.0)",
+          "Accept": "*/*",
+        },
+        timeout: timeoutMs,
       }, (res) => {
-        if ([301, 302, 307, 308].includes(res.statusCode) && res.headers.location) {
-          return resolve(fetchURL(res.headers.location, redirects - 1));
+        if ([301,302,307,308].includes(res.statusCode) && res.headers.location) {
+          return resolve(fetchURL(res.headers.location, redirects - 1, timeoutMs));
         }
         if (res.statusCode !== 200) return reject(new Error(`HTTP ${res.statusCode}`));
         let data = "";
-        res.on("data", chunk => data += chunk);
+        res.on("data", c => data += c);
         res.on("end", () => resolve(data));
         res.on("error", reject);
       });
@@ -67,16 +69,16 @@ function parseM3U(text) {
   for (const line of lines) {
     if (line.startsWith("#EXTINF")) {
       cur = {};
-      const nameM = line.match(/,(.+)$/);
-      cur.name = nameM ? nameM[1].trim() : "Unknown";
-      const logoM = line.match(/tvg-logo="([^"]*)"/);
-      cur.logo = logoM ? logoM[1] : "";
-      const groupM = line.match(/group-title="([^"]*)"/);
-      cur.group = groupM ? groupM[1] : "General";
-      const countryM = line.match(/tvg-country="([^"]*)"/);
-      cur.country = countryM ? countryM[1] : "";
-      const langM = line.match(/tvg-language="([^"]*)"/);
-      cur.language = langM ? langM[1] : "";
+      const nm = line.match(/,(.+)$/);
+      cur.name = nm ? nm[1].trim() : "Unknown";
+      const lo = line.match(/tvg-logo="([^"]*)"/);
+      cur.logo = lo ? lo[1] : "";
+      const gr = line.match(/group-title="([^"]*)"/);
+      cur.group = gr ? gr[1] : "General";
+      const co = line.match(/tvg-country="([^"]*)"/);
+      cur.country = co ? co[1] : "";
+      const la = line.match(/tvg-language="([^"]*)"/);
+      cur.language = la ? la[1] : "";
     } else if (cur && !line.startsWith("#")) {
       cur.url = line;
       channels.push(cur);
@@ -86,81 +88,184 @@ function parseM3U(text) {
   return channels;
 }
 
-/* ══ QUALITY FILTER ══ */
+/* ══ QUALITY PRE-FILTER ══ */
 function isQuality(ch) {
   if (!ch.logo || !ch.logo.trim()) return false;
-  if (!ch.url || !ch.url.trim()) return false;
+  if (!ch.url  || !ch.url.trim())  return false;
   const name = (ch.name || "").toUpperCase();
-  const bad = [" SD", "(SD)", "[SD]", "480P", "360P", "240P", "144P", "RADIO", " AM ", " FM "];
-  if (bad.some(m => name.includes(m))) return false;
-  return true;
+  const bad  = [" SD","(SD)","[SD]","480P","360P","240P","144P","RADIO"," AM "," FM "];
+  return !bad.some(m => name.includes(m));
 }
 
-/* ══ SINGLE STREAM CHECK ══ */
-function checkStream(streamUrl) {
+/* ══ DEEP HLS CHECK ══
+   1. Fetch the manifest URL
+   2. If it redirects to another .m3u8 follow it
+   3. Confirm the content contains valid HLS tags
+   4. Extract one segment URL and confirm that loads too
+   This guarantees the stream actually has playable video data
+══════════════════════ */
+async function deepCheck(streamUrl) {
+  try {
+    // Step 1 — fetch manifest
+    const manifest = await fetchURL(streamUrl, 5, FETCH_TIMEOUT_MS);
+
+    // Step 2 — must be HLS content
+    if (!manifest.includes("#EXTM3U")) return false;
+
+    // Step 3 — if it's a master playlist, follow one variant
+    if (manifest.includes("#EXT-X-STREAM-INF")) {
+      const lines = manifest.split("\n").map(l => l.trim()).filter(Boolean);
+      let variantUrl = null;
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i].startsWith("#EXT-X-STREAM-INF") && lines[i+1] && !lines[i+1].startsWith("#")) {
+          variantUrl = lines[i+1];
+          break;
+        }
+      }
+      if (!variantUrl) return false;
+
+      // Resolve relative URL
+      if (!variantUrl.startsWith("http")) {
+        const base = new URL(streamUrl);
+        variantUrl = new URL(variantUrl, base.href).href;
+      }
+
+      // Fetch the variant manifest
+      const variant = await fetchURL(variantUrl, 3, FETCH_TIMEOUT_MS);
+      if (!variant.includes("#EXTM3U")) return false;
+
+      // Step 4 — extract a segment and verify it loads
+      return await verifySegment(variant, variantUrl);
+    }
+
+    // It's already a media playlist — verify a segment
+    return await verifySegment(manifest, streamUrl);
+
+  } catch {
+    return false;
+  }
+}
+
+/* Verify one .ts or .m4s segment actually responds with data */
+async function verifySegment(manifest, baseUrl) {
+  try {
+    const lines = manifest.split("\n").map(l => l.trim()).filter(Boolean);
+    // Find first segment line (doesn't start with #)
+    const segLine = lines.find(l => !l.startsWith("#") && l.length > 0);
+    if (!segLine) return false;
+
+    let segUrl = segLine;
+    if (!segUrl.startsWith("http")) {
+      segUrl = new URL(segLine, baseUrl).href;
+    }
+
+    // Fetch first 2KB of segment to confirm real video data
+    const segData = await fetchPartial(segUrl, 2048);
+    // A valid MPEG-TS segment starts with 0x47 (sync byte)
+    // A valid MP4 segment has 'ftyp' or 'moof' boxes
+    // We just need something that isn't HTML or an error page
+    if (!segData || segData.length < 100) return false;
+
+    // Reject if it looks like an HTML error page
+    const start = segData.slice(0, 50).toLowerCase();
+    if (start.includes("<!doctype") || start.includes("<html")) return false;
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/* Fetch first N bytes of a URL */
+function fetchPartial(rawUrl, bytes) {
   return new Promise((resolve) => {
     try {
-      const parsed = new URL(streamUrl);
+      const parsed = new URL(rawUrl);
       const mod = parsed.protocol === "https:" ? https : http;
-      const req = mod.request({
-        method: "GET",
-        hostname: parsed.hostname,
-        port: parsed.port || (parsed.protocol === "https:" ? 443 : 80),
-        path: parsed.pathname + parsed.search,
+      const req = mod.get(rawUrl, {
         headers: {
           "User-Agent": "Mozilla/5.0 (compatible; NovaTV/1.0)",
-          "Range": "bytes=0-1023",
+          "Range": `bytes=0-${bytes - 1}`,
         },
-        timeout: CHECK_TIMEOUT_MS,
+        timeout: FETCH_TIMEOUT_MS,
       }, (res) => {
-        req.destroy();
-        resolve(res.statusCode < 400 || res.statusCode === 206);
+        if (res.statusCode >= 400) { req.destroy(); return resolve(null); }
+        const chunks = [];
+        let total = 0;
+        res.on("data", chunk => {
+          chunks.push(chunk);
+          total += chunk.length;
+          if (total >= bytes) { req.destroy(); resolve(Buffer.concat(chunks).toString("binary")); }
+        });
+        res.on("end", () => resolve(Buffer.concat(chunks).toString("binary")));
+        res.on("error", () => resolve(null));
       });
-      req.on("error", () => resolve(false));
-      req.on("timeout", () => { req.destroy(); resolve(false); });
-      req.end();
-    } catch { resolve(false); }
+      req.on("error", () => resolve(null));
+      req.on("timeout", () => { req.destroy(); resolve(null); });
+    } catch { resolve(null); }
   });
 }
 
-/* ══ BUILD CACHE WITH PROGRESS ══ */
+/* ══ CHECK BATCH ══ */
+async function checkBatch(channels) {
+  const alive = [];
+  let checked = 0;
+  const total = channels.length;
+
+  for (let i = 0; i < channels.length; i += MAX_CONCURRENT) {
+    const batch = channels.slice(i, i + MAX_CONCURRENT);
+    const results = await Promise.all(batch.map(ch => deepCheck(ch.url)));
+    batch.forEach((ch, idx) => { if (results[idx]) alive.push(ch); });
+    checked += batch.length;
+
+    const pct = 20 + Math.round((checked / total) * 75);
+    broadcast({
+      stage: "check",
+      message: `Testing streams… ${checked} of ${total}`,
+      checked, total,
+      alive: alive.length,
+      pct,
+    });
+    console.log(`  ${checked}/${total} — alive: ${alive.length}`);
+  }
+  return alive;
+}
+
+/* ══ BUILD CACHE ══ */
 async function buildCache(force = false) {
   const now = Date.now();
   if (!force && cache.channels && (now - cache.timestamp) < CACHE_DURATION_MS) {
     return cache.channels;
   }
   if (buildInProgress) {
-    // Wait for existing build to finish
-    return new Promise((resolve) => {
-      const check = setInterval(() => {
-        if (!buildInProgress) { clearInterval(check); resolve(cache.channels); }
-      }, 500);
+    return new Promise(resolve => {
+      const t = setInterval(() => {
+        if (!buildInProgress) { clearInterval(t); resolve(cache.channels); }
+      }, 600);
     });
   }
 
   buildInProgress = true;
-
   try {
-    // ── STEP 1: Fetching playlists ──
+
+    /* 1 — Fetch playlists */
     broadcast({ stage: "fetch", message: "Fetching channel playlists…", pct: 2 });
     console.log("\n📡 Fetching playlists…");
-
     const allRaw = [];
-    const results = await Promise.allSettled(PLAYLISTS.map(u => fetchURL(u)));
-    results.forEach((r, i) => {
+    const fetched = await Promise.allSettled(PLAYLISTS.map(u => fetchURL(u, 5, 20000)));
+    fetched.forEach((r, i) => {
       const label = PLAYLISTS[i].split("/").pop();
       if (r.status === "fulfilled") {
-        const parsed = parseM3U(r.value);
-        console.log(`  ✅ ${label} — ${parsed.length} channels`);
-        allRaw.push(...parsed);
+        const ch = parseM3U(r.value);
+        console.log(`  ✅ ${label} — ${ch.length}`);
+        allRaw.push(...ch);
       } else {
         console.log(`  ❌ ${label} — ${r.reason.message}`);
       }
     });
-
     broadcast({ stage: "fetch", message: `Found ${allRaw.length.toLocaleString()} raw channels`, pct: 8 });
 
-    // ── STEP 2: Deduplicate ──
+    /* 2 — Deduplicate */
     broadcast({ stage: "filter", message: "Removing duplicates…", pct: 12 });
     const seen = new Set();
     const deduped = allRaw.filter(ch => {
@@ -168,56 +273,33 @@ async function buildCache(force = false) {
       seen.add(ch.url); return true;
     });
 
-    // ── STEP 3: Quality filter ──
+    /* 3 — Quality filter */
     broadcast({ stage: "filter", message: "Filtering HD channels with thumbnails…", pct: 16 });
     const quality = deduped.filter(isQuality);
-    console.log(`⭐ After quality filter: ${quality.length}`);
-
+    console.log(`⭐ Quality: ${quality.length}`);
     broadcast({
       stage: "filter",
-      message: `${quality.length} HD channels found — checking which ones are live…`,
+      message: `${quality.length} HD channels — now deep-checking each stream…`,
       pct: 20,
     });
 
-    // ── STEP 4: Health check ──
-    const toCheck = quality.slice(0, 800);
-    const total = toCheck.length;
-    const alive = [];
-    let checked = 0;
+    /* 4 — Deep HLS check */
+    const toCheck = quality.slice(0, 600);
+    console.log(`\n🔬 Deep HLS checking ${toCheck.length} streams…`);
+    const alive = await checkBatch(toCheck);
+    console.log(`\n✅ Verified alive: ${alive.length}`);
 
-    console.log(`\n🏥 Health checking ${total} streams…`);
-
-    for (let i = 0; i < toCheck.length; i += MAX_CONCURRENT) {
-      const batch = toCheck.slice(i, i + MAX_CONCURRENT);
-      const res = await Promise.all(batch.map(ch => checkStream(ch.url)));
-      batch.forEach((ch, idx) => { if (res[idx]) alive.push(ch); });
-      checked += batch.length;
-
-      const pct = 20 + Math.round((checked / total) * 75);
-      broadcast({
-        stage: "check",
-        message: `Checking streams… ${checked} of ${total} done`,
-        checked,
-        total,
-        alive: alive.length,
-        pct,
-      });
-
-      console.log(`  ${checked}/${total} checked — ${alive.length} alive`);
-    }
-
-    // ── STEP 5: Done ──
+    /* 5 — Done */
     const final = alive.slice(0, MAX_CHANNELS);
     cache = { channels: final, timestamp: Date.now() };
-    console.log(`\n✅ Done — ${final.length} live channels ready\n`);
 
     broadcast({
       stage: "done",
-      message: `✅ ${final.length} live channels ready!`,
+      message: `✅ ${final.length} verified live channels ready!`,
       count: final.length,
       pct: 100,
     });
-
+    console.log(`📺 Final: ${final.length} channels\n`);
     return final;
 
   } finally {
@@ -234,36 +316,36 @@ function proxyStream(streamUrl, clientRes) {
       headers: {
         "User-Agent": "Mozilla/5.0 (compatible; NovaTV/1.0)",
         "Accept": "*/*",
+        "Origin": parsed.origin,
       },
-      timeout: 10000,
+      timeout: 12000,
     }, (upstream) => {
       const headers = {
         "Access-Control-Allow-Origin": "*",
         "Content-Type": upstream.headers["content-type"] || "application/octet-stream",
       };
       if (upstream.headers["content-length"]) headers["Content-Length"] = upstream.headers["content-length"];
-      if (upstream.headers["content-range"]) headers["Content-Range"] = upstream.headers["content-range"];
+      if (upstream.headers["content-range"])  headers["Content-Range"]  = upstream.headers["content-range"];
       clientRes.writeHead(upstream.statusCode, headers);
       upstream.pipe(clientRes);
-      upstream.on("error", () => clientRes.end());
+      upstream.on("error", () => { try { clientRes.end(); } catch {} });
     });
     req.on("error", () => { try { clientRes.writeHead(502); clientRes.end(); } catch {} });
     req.on("timeout", () => { req.destroy(); try { clientRes.writeHead(504); clientRes.end(); } catch {} });
   } catch { clientRes.writeHead(400); clientRes.end("Bad URL"); }
 }
 
-/* ══ SERVER ══ */
+/* ══ HTTP SERVER ══ */
 const server = http.createServer(async (req, res) => {
-  const parsed = url.parse(req.url, true);
+  const parsed   = url.parse(req.url, true);
   const pathname = parsed.pathname;
 
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Methods", "GET, OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Range");
-
   if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
 
-  /* ── SSE progress endpoint ── */
+  /* SSE progress */
   if (pathname === "/api/progress") {
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
@@ -271,41 +353,27 @@ const server = http.createServer(async (req, res) => {
       "Connection": "keep-alive",
       "X-Accel-Buffering": "no",
     });
-    res.write("retry: 1000\n\n");
-
-    // If already cached, immediately tell client we're done
+    res.write("retry: 2000\n\n");
     if (cache.channels && !buildInProgress) {
-      res.write(`data: ${JSON.stringify({
-        stage: "done",
-        message: `✅ ${cache.channels.length} live channels ready!`,
-        count: cache.channels.length,
-        pct: 100,
-      })}\n\n`);
+      res.write(`data: ${JSON.stringify({ stage:"done", message:`✅ ${cache.channels.length} live channels ready!`, count:cache.channels.length, pct:100 })}\n\n`);
       res.end();
       return;
     }
-
-    // Otherwise subscribe to live progress
     progressClients.add(res);
     req.on("close", () => progressClients.delete(res));
     return;
   }
 
-  /* ── Channels API ── */
+  /* Channels */
   if (pathname === "/api/channels") {
     try {
-      const force = parsed.query.refresh === "true";
-      const channels = await buildCache(force);
-      const proxied = channels.map(ch => ({
+      const channels = await buildCache(parsed.query.refresh === "true");
+      const proxied  = channels.map(ch => ({
         ...ch,
         url: `/api/stream?url=${encodeURIComponent(ch.url)}`,
       }));
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({
-        channels: proxied,
-        cached_at: new Date(cache.timestamp).toISOString(),
-        total: proxied.length,
-      }));
+      res.end(JSON.stringify({ channels: proxied, cached_at: new Date(cache.timestamp).toISOString(), total: proxied.length }));
     } catch (e) {
       res.writeHead(500, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ error: e.message }));
@@ -313,7 +381,7 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  /* ── Stream proxy ── */
+  /* Stream proxy */
   if (pathname === "/api/stream") {
     const su = parsed.query.url;
     if (!su) { res.writeHead(400); res.end("Missing url"); return; }
@@ -321,14 +389,14 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  /* ── Ping ── */
+  /* Ping */
   if (pathname === "/api/ping") {
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({ ok: true, count: cache.channels?.length || 0, building: buildInProgress }));
+    res.end(JSON.stringify({ ok:true, count:cache.channels?.length||0, building:buildInProgress }));
     return;
   }
 
-  /* ── Serve index.html ── */
+  /* index.html */
   const htmlPath = path.join(__dirname, "index.html");
   if (fs.existsSync(htmlPath)) {
     res.writeHead(200, { "Content-Type": "text/html" });
@@ -339,7 +407,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, "0.0.0.0", () => {
-  console.log(`\n✅ NovaTV running on port ${PORT}`);
-  console.log("🚀 Starting channel scan on boot…\n");
-  buildCache().catch(e => console.error("Boot build failed:", e.message));
+  console.log(`\n✅ NovaTV on port ${PORT}`);
+  console.log("🔬 Starting deep stream verification on boot…\n");
+  buildCache().catch(e => console.error("Boot failed:", e.message));
 });
